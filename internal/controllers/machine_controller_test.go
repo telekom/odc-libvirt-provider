@@ -240,6 +240,61 @@ var _ = Describe("MachineController", func() {
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(m.Spec.Power).To(Equal(api.PowerStatePowerOff))
 			}).Should(Succeed())
+
+			By("ensuring the powered-off domain stops")
+			domainConfig := &libvirtxml.Domain{}
+			Expect(domainConfig.Unmarshal(domainXMLData)).To(Succeed())
+			Expect(domainConfig.Type).To(BeElementOf("kvm", "qemu"))
+			GinkgoWriter.Printf("POWER_DOMAIN machine_id=%s xml=%s\n", machine.ID, domainXMLData)
+			assertPoweredOff := func(g Gomega) {
+				currentMachine, err := getMachine(machine.ID)
+				g.Expect(err).NotTo(HaveOccurred())
+				currentDomain, err := libvirtConn.DomainLookupByUUID(libvirtutils.UUIDStringToBytes(machine.ID))
+				if libvirt.IsNotFound(err) {
+					return
+				}
+				g.Expect(err).NotTo(HaveOccurred())
+				domainState, _, err := libvirtConn.DomainGetState(currentDomain, 0)
+				if libvirt.IsNotFound(err) {
+					return
+				}
+				g.Expect(err).NotTo(HaveOccurred())
+				GinkgoWriter.Printf("POWER_SAMPLE at=%s machine_id=%s desired_numeric=%d status=%s domain_state=%d\n", time.Now().UTC().Format(time.RFC3339Nano), machine.ID, currentMachine.Spec.Power, currentMachine.Status.State, domainState)
+				g.Expect(currentMachine.Spec.Power).To(Equal(api.PowerStatePowerOff))
+				g.Expect(libvirt.DomainState(domainState)).To(Equal(libvirt.DomainShutoff))
+			}
+			Eventually(assertPoweredOff).WithPolling(time.Second).Should(Succeed())
+
+			By("ensuring execution stays off across a controller resync")
+			Consistently(assertPoweredOff).WithTimeout(35 * time.Second).WithPolling(time.Second).Should(Succeed())
+
+			By("ensuring machine status no longer reports running")
+			Eventually(func(g Gomega) {
+				currentMachine, err := getMachine(machine.ID)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(currentMachine.Spec.Power).To(Equal(api.PowerStatePowerOff))
+				g.Expect(currentMachine.Status.State).NotTo(Equal(api.MachineStateRunning))
+			}).Should(Succeed())
+
+			By("powering the same machine on again")
+			machine, err = getMachine(machine.ID)
+			Expect(err).NotTo(HaveOccurred())
+			machine.Spec.Power = api.PowerStatePowerOn
+			_, err = updateMachine(machine)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("ensuring native execution and machine status return to running")
+			Eventually(func(g Gomega) {
+				currentDomain, err := libvirtConn.DomainLookupByUUID(libvirtutils.UUIDStringToBytes(machine.ID))
+				g.Expect(err).NotTo(HaveOccurred())
+				domainState, _, err := libvirtConn.DomainGetState(currentDomain, 0)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(libvirt.DomainState(domainState)).To(Equal(libvirt.DomainRunning))
+				currentMachine, err := getMachine(machine.ID)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(currentMachine.Spec.Power).To(Equal(api.PowerStatePowerOn))
+				g.Expect(currentMachine.Status.State).To(Equal(api.MachineStateRunning))
+			}).Should(Succeed())
 		})
 	})
 })
