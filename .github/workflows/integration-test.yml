@@ -1,16 +1,14 @@
 name: Run integration tests
 
 on:
-  pull_request:
-    types: [labeled, synchronize, reopened]
-    paths-ignore:
-      - 'docs/**'
+  push:
+    branches:
+      - gpvm/33/reproduce-power-off
 
 jobs:
   integration-tests:
     runs-on: ubuntu-22.04
-
-    if: contains(github.event.pull_request.labels.*.name, 'integration-tests')
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -91,6 +89,7 @@ jobs:
           sudo mount -o remount /dev/pts
 
 
-      - name: Run integration tests
-        # Starting a new instance of the Bash shell to reflect the added permissions
-        run: sudo -H -E -u $USER bash -c 'GOTOOLCHAIN=auto make integration-tests'
+      - name: Reproduce ignored machine power-off
+        run: |
+          sudo -H -E -u "$USER" bash -c \
+            'GOTOOLCHAIN=auto go run github.com/onsi/ginkgo/v2/ginkgo run --label-filter=integration --focus="should update machine power state" --fail-on-empty -v ./internal/controllers'
